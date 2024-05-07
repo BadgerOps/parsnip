@@ -1,5 +1,7 @@
 # Copyright 2024, Battelle Energy Alliance, LLC, ALL RIGHTS RESERVED
 
+import os
+import time
 import argparse
 
 import utils
@@ -11,6 +13,13 @@ import config
 
 # Graph Theory Imports
 import networkx as nx
+
+# File Watcher Imports
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+# Zip file handler imports
+import zipfile
 
 def _updateUtilValues(configuration):
     utils.PROTOCOL_NAME = configuration.protocol
@@ -58,20 +67,13 @@ def determineEntryPointInformation(configuration):
     entryPointKey = graphing.normalizedKey3(utils.normalizedScope(entryPointScope, "object"), "object", entryPointName)
     
     return (True, entryPointScope, entryPointName, entryPointKey)
-    
-if __name__ == "__main__":
-    import os
-    
-    ############################################################################
-    # Parse Command Line Arguments
-    ############################################################################
-    inRootFolder, outRootFolder = _parseArgs()
 
+def main(filePath=None):
     ############################################################################
     # Load the configuration file
     ############################################################################    
     configPath = os.path.join(inRootFolder, utils.DEFAULT_SCOPE, "config.json")
-    
+    print(configPath)
     loadSuccessful, configuration = config.loadConfig(configPath)
     if not loadSuccessful:
         print(configPath + " is a required file")
@@ -101,3 +103,76 @@ if __name__ == "__main__":
                                       bitfields, enums,
                                       objects, switches,
                                       entryPointScope, entryPointName)
+
+class fileWatcher:
+
+    def __init__(self, inputDirectory=None):
+        self.observer = Observer()
+        if inputDirectory:
+            self.inputDirectory = inputDirectory
+        else:
+            print("Unable to watch input directory! Please check your configuration")
+            os.exit(1)
+
+    def app(self):
+        # main loop
+        event_handler = Handler()
+        self.observer.schedule(event_handler, self.inputDirectory, recursive=True)
+        self.observer.start()
+        try:
+            while True:
+                time.sleep(5)
+                print("Main loop, loopin...")
+        except Exception as e:
+            print("Failed in main loop, error: ", e)
+            self.observer.stop()
+        self.observer.join()
+
+class Handler(FileSystemEventHandler):
+
+    @staticmethod
+    def on_any_event(event):
+        if event.event_type == 'created':
+            print(f"Event is: {event}")
+            print(type(event.src_path))
+            print(event.src_path)
+            if zipfile.is_zipfile(os.path.join(event.src_path)):
+                print("zippy zoo")
+            elif os.path.isdir(os.path.join(event.src_path)):
+                print("its a directory", os.path.join(event.src_path))
+                print("passing along to main func")
+                print(os.path.isfile(os.path.join(event.src_path, 'config.json')))
+                main(filePath=event.src_path)
+            else:
+                print("I'm not sure... ", event)
+
+            if event.is_directory:
+                print("Directory detected!")
+                print(type(event.src_path))
+        else:
+            print(event.event_type)
+        #     main(filePath=event.src_path)
+
+        # elif event.event_type == 'created':
+        #     # Take any action here when a file is first created.
+        #     print(f"Received created event - %s." % event.src_path)
+
+        # elif event.event_type == 'modified':
+        #     # Taken any action here when a file is modified.
+        #     print(f"Received modified event - %s." % event.src_path)
+
+
+
+if __name__ == "__main__":
+
+    ############################################################################
+    # Parse Command Line Arguments
+    ############################################################################
+    inRootFolder, outRootFolder = _parseArgs()
+    print(f"Folders! check em: {inRootFolder}, {outRootFolder}")
+
+    ############################################################################
+    # Start up Watcher loop
+    ############################################################################
+    watcher = fileWatcher(inputDirectory=inRootFolder)
+    watcher.app()
