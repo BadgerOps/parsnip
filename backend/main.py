@@ -15,6 +15,8 @@ import config
 import networkx as nx
 
 # File Watcher Imports
+import shutil
+from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -35,11 +37,13 @@ def _parseArgs():
 
     return (args.inputRootDirectory, args.outputRootDirectory)
     
-def _generateData(inRootFolder, configuration, entryPointScope, entryPointName, entryPointKey):
+def _generateData(filePath, configuration, entryPointScope, entryPointName, entryPointKey):
+    print("The root folder is ", inRootFolder)
+    print("The file path is: ", filePath)
     ############################################################################
     # Process the data files
     ############################################################################    
-    objects, switches, bitfields, enums = processing.loadFiles(inRootFolder, configuration.scopes)
+    objects, switches, bitfields, enums = processing.loadFiles(filePath, configuration.scopes)
                
     ############################################################################
     # Use some Graph Theory to our advantage
@@ -71,9 +75,10 @@ def determineEntryPointInformation(configuration):
 def main(filePath=None):
     ############################################################################
     # Load the configuration file
-    ############################################################################    
-    configPath = os.path.join(inRootFolder, utils.DEFAULT_SCOPE, "config.json")
-    print(configPath)
+    ############################################################################
+    inRootFolder = filePath
+    configPath = os.path.join(inRootFolder, "config.json")
+    #configPath = os.path.join(filePath, "config.json")
     loadSuccessful, configuration = config.loadConfig(configPath)
     if not loadSuccessful:
         print(configPath + " is a required file")
@@ -92,7 +97,7 @@ def main(filePath=None):
     ############################################################################
     # Load and work with data
     ############################################################################
-    zeekTypes, zeekMainFileObject, crossScopeItems, bitfields, enums, objects, switches = _generateData(inRootFolder, configuration, entryPointScope, entryPointName, entryPointKey)
+    zeekTypes, zeekMainFileObject, crossScopeItems, bitfields, enums, objects, switches = _generateData(filePath, configuration, entryPointScope, entryPointName, entryPointKey)
 
     ############################################################################
     # Generate output
@@ -114,52 +119,71 @@ class fileWatcher:
             print("Unable to watch input directory! Please check your configuration")
             os.exit(1)
 
-    def app(self):
+    def watch(self):
         # main loop
         event_handler = Handler()
         self.observer.schedule(event_handler, self.inputDirectory, recursive=True)
         self.observer.start()
         try:
             while True:
-                time.sleep(5)
-                print("Main loop, loopin...")
+                pass
         except Exception as e:
             print("Failed in main loop, error: ", e)
             self.observer.stop()
         self.observer.join()
 
 class Handler(FileSystemEventHandler):
-
+    """
+    Create a class to handle file create events
+    This uses the 'on_created' staticmethod in the watchdog package
+    """
     @staticmethod
-    def on_any_event(event):
-        if event.event_type == 'created':
-            print(f"Event is: {event}")
-            print(type(event.src_path))
-            print(event.src_path)
-            if zipfile.is_zipfile(os.path.join(event.src_path)):
-                print("zippy zoo")
-            elif os.path.isdir(os.path.join(event.src_path)):
-                print("its a directory", os.path.join(event.src_path))
-                print("passing along to main func")
-                print(os.path.isfile(os.path.join(event.src_path, 'config.json')))
-                main(filePath=event.src_path)
+    def on_created(event):
+        config_location = None
+        file_path = str(event.src_path)
+        if event.is_directory:
+            if os.path.isdir(file_path):
+                for root, dirs, files in os.walk(file_path):
+                    if 'config.json' in files:
+                            config_location = root
+                    if config_location:
+                        print("processing config file in dir path", config_location)
+                        main(filePath=config_location)
             else:
-                print("I'm not sure... ", event)
-
-            if event.is_directory:
-                print("Directory detected!")
-                print(type(event.src_path))
+                print(f"Unable to process files placed in {file_path}")
+                exit(1)
         else:
-            print(event.event_type)
-        #     main(filePath=event.src_path)
+            print("Checking to see if its a zip...", file_path, type(file_path))
+            # check to see if the last element in the file_path string is 'zip' and go through tlat flow
+            print(file_path.split('.')[-1])
+            if file_path.split('.')[-1] == 'zip':
+                print("its a zip... extracting")
+                basepath = '/var/tmp/extracted/'
+                with zipfile.ZipFile(file_path) as zip:
+                    zip.extractall(basepath)
+                    for root, dirs, files in os.walk(basepath):
+                        if 'config.json' in files:
+                            config_location = Path(root)
+                            print("processing config file in extracted zip path")
+                            main(filePath=config_location)
+                            break
+                    if config_location:
+                        print("doing the thing...")
+            else:
+                # Dont try to process anything
+                pass
+        pass
 
-        # elif event.event_type == 'created':
-        #     # Take any action here when a file is first created.
-        #     print(f"Received created event - %s." % event.src_path)
-
-        # elif event.event_type == 'modified':
-        #     # Taken any action here when a file is modified.
-        #     print(f"Received modified event - %s." % event.src_path)
+    def backupFiles(file_path):
+        original_path = os.path.basename(file_path)
+        archive_path = Path('/var/tmp/archived')
+        if not archive_path.exists():
+            archive_path.mkdir()
+        if not os.path.join(archive_path, original_path):
+            print("Backing up to /var/tmp/archived/")
+            shutil.move(file_path, str(archive_path / original_path))
+        else:
+            print("Already backed up...")
 
 
 
@@ -175,4 +199,4 @@ if __name__ == "__main__":
     # Start up Watcher loop
     ############################################################################
     watcher = fileWatcher(inputDirectory=inRootFolder)
-    watcher.app()
+    watcher.watch()
